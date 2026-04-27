@@ -40,28 +40,61 @@ class AuthService {
   }
 
   Future<Map<String, dynamic>> login({
-    required String email,
-    required String contrasena,
+    required String identificador,
+    required String password,
   }) async {
-    final response = await http.post(
-      Uri.parse('${AppConfig.baseUrl}/auth/login'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'email': email,
-        'password': contrasena,
-      }),
-    );
+    try {
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/auth/login'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'User-Agent': 'Dart/Flutter',
+        },
+        body: jsonEncode({
+          'identificador': identificador.trim(),
+          'password': password.trim(),
+        }),
+      );
 
-    final data = jsonDecode(utf8.decode(response.bodyBytes));
+      print('LOGIN STATUS: ${response.statusCode}');
+      print('LOGIN BODY: ${utf8.decode(response.bodyBytes)}');
 
-    if (response.statusCode == 200) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_tokenKey, data['access_token']);
-      await prefs.setString(_usuarioKey, jsonEncode(data['usuario']));
-      return {'ok': true, 'data': data};
+      final data = jsonDecode(utf8.decode(response.bodyBytes));
+
+      if (response.statusCode == 200) {
+        final prefs = await SharedPreferences.getInstance();
+
+        await prefs.setString(_tokenKey, data['access_token']);
+        await prefs.setString(_usuarioKey, jsonEncode(data['usuario']));
+
+        return {
+          'ok': true,
+          'data': data,
+          'token': data['access_token'],
+          'usuario': data['usuario'],
+          'id_taller': data['id_taller'],
+        };
+      }
+
+      String mensajeError = 'Credenciales incorrectas';
+
+      if (data['detail'] is String) {
+        mensajeError = data['detail'];
+      } else if (data['detail'] is List) {
+        mensajeError = data['detail'].toString();
+      }
+
+      return {
+        'ok': false,
+        'error': mensajeError,
+      };
+    } catch (e) {
+      return {
+        'ok': false,
+        'error': 'Error de conexión: $e',
+      };
     }
-
-    return {'ok': false, 'error': data['detail'] ?? 'Credenciales incorrectas'};
   }
 
   Future<Map<String, dynamic>> recuperarPassword(String email) async {
@@ -108,8 +141,17 @@ class AuthService {
   Future<Usuario?> getUsuarioActual() async {
     final prefs = await SharedPreferences.getInstance();
     final str = prefs.getString(_usuarioKey);
-    if (str == null) return null;
-    return Usuario.fromJson(jsonDecode(str));
+
+    if (str == null || str.isEmpty) return null;
+
+    try {
+      final json = jsonDecode(str);
+      return Usuario.fromJson(json);
+    } catch (e) {
+      print('ERROR PARSEANDO USUARIO: $e');
+      await prefs.remove(_usuarioKey);
+      return null;
+    }
   }
 
   Future<bool> isLoggedIn() async {

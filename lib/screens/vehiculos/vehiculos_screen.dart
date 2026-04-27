@@ -15,6 +15,7 @@ class _VehiculosScreenState extends State<VehiculosScreen> {
   List<Vehiculo> _vehiculos = [];
   Usuario? _usuario;
   bool _loading = true;
+  String? _error;
   final _svc = VehiculoService();
 
   final _marca = TextEditingController();
@@ -29,12 +30,41 @@ class _VehiculosScreenState extends State<VehiculosScreen> {
   }
 
   Future<void> _cargar() async {
-    _usuario = await AuthService().getUsuarioActual();
-    if (_usuario != null) {
-      final lista = await _svc.listarPorUsuario(_usuario!.codigo);
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final usuario = await AuthService().getUsuarioActual();
+
+      if (!mounted) return;
+
+      if (usuario == null) {
+        setState(() {
+          _usuario = null;
+          _vehiculos = [];
+          _loading = false;
+          _error =
+              'No se encontró el usuario logueado. Cierra sesión e inicia otra vez.';
+        });
+        return;
+      }
+
+      final lista = await _svc.listarPorUsuario(usuario.codigo);
+
+      if (!mounted) return;
+
       setState(() {
+        _usuario = usuario;
         _vehiculos = lista;
         _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        _loading = false;
+        _error = 'Error al cargar vehículos: $e';
       });
     }
   }
@@ -162,15 +192,47 @@ class _VehiculosScreenState extends State<VehiculosScreen> {
       ),
       body: _loading
           ? const Center(
-              child: CircularProgressIndicator(color: Color(0xFFFF6B35)))
-          : _vehiculos.isEmpty
-              ? _estadoVacio()
-              : ListView.separated(
-                  padding: const EdgeInsets.all(20),
-                  itemCount: _vehiculos.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 12),
-                  itemBuilder: (_, i) => _tarjetaVehiculo(_vehiculos[i]),
-                ),
+              child: CircularProgressIndicator(color: Color(0xFFFF6B35)),
+            )
+          : _error != null
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(
+                          Icons.error_outline,
+                          size: 60,
+                          color: Colors.redAccent,
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          _error!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                        const SizedBox(height: 20),
+                        ElevatedButton(
+                          onPressed: _cargar,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFFF6B35),
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('Reintentar'),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : _vehiculos.isEmpty
+                  ? _estadoVacio()
+                  : ListView.separated(
+                      padding: const EdgeInsets.all(20),
+                      itemCount: _vehiculos.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 12),
+                      itemBuilder: (_, i) => _tarjetaVehiculo(_vehiculos[i]),
+                    ),
     );
   }
 

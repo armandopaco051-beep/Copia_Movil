@@ -4,14 +4,15 @@ import 'dart:convert';
 Future<void> testConexion() async {
   try {
     final response = await http.get(
-      Uri.parse('http://10.0.2.2:8000/health'),
-      // Cambiá por tu IP si usás celular físico
+      Uri.parse('http://192.168.0.4:8000/health'),
     );
+
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
       print('✅ Backend conectado: ${data['estado']}');
     } else {
-      print('❌ Error: ${response.statusCode}');
+      print('❌ Error del backend: ${response.statusCode}');
+      print('Respuesta: ${response.body}');
     }
   } catch (e) {
     print('❌ Sin conexión: $e');

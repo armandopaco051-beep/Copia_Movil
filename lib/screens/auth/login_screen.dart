@@ -24,8 +24,8 @@ class _LoginScreenState extends State<LoginScreen> {
       _error = '';
     });
     final res = await AuthService().login(
-      email: _emailCtrl.text.trim(),
-      contrasena: _passCtrl.text,
+      identificador: _emailCtrl.text.trim(),
+      password: _passCtrl.text,
     );
     if (!mounted) return;
     setState(() => _loading = false);

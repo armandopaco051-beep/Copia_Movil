@@ -6,7 +6,6 @@ class Usuario {
   final String email;
   final String telefono;
   final bool estado;
-  final String password;
   final int idRol;
 
   Usuario({
@@ -14,7 +13,6 @@ class Usuario {
     required this.nombre,
     required this.apellido,
     required this.email,
-    required this.password,
     required this.telefono,
     required this.estado,
     required this.idRol,
@@ -27,7 +25,6 @@ class Usuario {
       nombre: json['nombre'],
       apellido: json['apellido'],
       email: json['email'],
-      password: json['password'],
       telefono: json['telefono'],
       estado: json['estado'],
       idRol: json['id_rol'],
@@ -39,7 +36,6 @@ class Usuario {
         'apellido': apellido,
         'email': email,
         'telefono': telefono,
-        'password': password,
         'id_rol': idRol,
       };
 }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:tallermovil/services/evidencia_service.dart';
 import 'dart:io';
 import '../../models/vehiculo.dart';
 import '../../models/usuario.dart';
@@ -22,6 +23,8 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
   String _descripcion = '';
   Position? _posicion;
   List<File> _fotos = [];
+  File? _audioFile;
+  String _transcripcionAudio = '';
   Vehiculo? _vehiculoSeleccionado;
   List<Vehiculo> _vehiculos = [];
   Usuario? _usuario;
@@ -141,8 +144,11 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
           backgroundColor: Colors.orange));
       return;
     }
+
     setState(() => _enviando = true);
-    final res = await IncidenteService().crear(
+
+    // PASO 1: Crear el incidente
+    final resIncidente = await IncidenteService().crear(
       descripcion: _descCtrl.text.isEmpty
           ? _categorias
               .firstWhere((c) => c['id'] == _categoriaSeleccionada)['nombre']
@@ -153,16 +159,45 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
       idCategoria: _categoriaSeleccionada!,
       codigoUsuario: _usuario!.codigo,
     );
-    setState(() => _enviando = false);
-    if (res['ok']) {
-      setState(() {
-        _incidenteCreado = res['data']['codigo'];
-        _paso = 3;
-      });
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(res['error']), backgroundColor: Colors.red));
+
+    if (!resIncidente['ok']) {
+      setState(() => _enviando = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(resIncidente['error']), backgroundColor: Colors.red));
+      return;
     }
+
+    final idIncidente = resIncidente['data']['codigo'];
+    final evidenciaSvc = EvidenciaService();
+
+    // PASO 2: Subir fotos (CU-11)
+    for (final foto in _fotos) {
+      await evidenciaSvc.subirImagen(idIncidente: idIncidente, imagen: foto);
+    }
+
+    // PASO 3: Subir audio si existe (CU-11 + CU-14)
+    if (_audioFile != null) {
+      final resAudio = await evidenciaSvc.subirAudio(
+          idIncidente: idIncidente, audio: _audioFile!);
+      if (resAudio['ok'] && resAudio['transcripcion']?.isNotEmpty == true) {
+        setState(() => _transcripcionAudio = resAudio['transcripcion']);
+      }
+    }
+
+    // PASO 4: Subir descripción de texto si hay (CU-11)
+    if (_descCtrl.text.isNotEmpty) {
+      await evidenciaSvc.subirTexto(
+          idIncidente: idIncidente, descripcion: _descCtrl.text);
+    }
+
+    // PASO 5: Procesar con IA automáticamente (CU-12 + CU-13)
+    await evidenciaSvc.procesarConIA(idIncidente);
+
+    setState(() {
+      _enviando = false;
+      _incidenteCreado = idIncidente;
+      _paso = 3;
+    });
   }
 
   @override
