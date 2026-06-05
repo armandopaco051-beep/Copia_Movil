@@ -9,6 +9,12 @@ import '../../models/usuario.dart';
 import '../../services/vehiculo_service.dart';
 import '../../services/incidente_service.dart';
 import '../../services/auth_service.dart';
+import '../chat/chat_incidente_screen.dart';
+import '../evaluaciones/evaluar_servicio_screen.dart';
+import '../incidentes/linea_tiempo_screen.dart';
+import '../pagos/pago_servicio_screen.dart';
+import '../tracking/tracking_en_vivo_screen.dart';
+import '../validacion/codigo_arribo_screen.dart';
 
 class EmergenciaScreen extends StatefulWidget {
   const EmergenciaScreen({super.key});
@@ -563,6 +569,152 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
             ]),
           ),
           const SizedBox(height: 32),
+          if (_incidenteCreado != null) ...[
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => EvaluarServicioScreen(
+                        idIncidente: _incidenteCreado!,
+                      ),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.star_rate_outlined),
+                label: const Text('Evaluar servicio'),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFFFB020),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14))),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => PagoServicioScreen(
+                        idIncidente: _incidenteCreado!,
+                      ),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.receipt_long_outlined),
+                label: const Text('Pago y comprobante'),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFFF6B35),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14))),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ChatIncidenteScreen(
+                        idIncidente: _incidenteCreado!,
+                      ),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.chat_bubble_outline),
+                label: const Text('Abrir chat con tecnico'),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1D9E75),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14))),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => CodigoArriboScreen(
+                        idIncidente: _incidenteCreado!,
+                      ),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.qr_code_2),
+                label: const Text('Ver PIN o QR de arribo'),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF0F3460),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14))),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => TrackingEnVivoScreen(
+                        idIncidente: _incidenteCreado!,
+                      ),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.map_outlined),
+                label: const Text('Ver ubicacion en vivo'),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1D9E75),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14))),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => LineaTiempoScreen(
+                        idIncidente: _incidenteCreado!,
+                      ),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.timeline),
+                label: const Text('Ver linea de tiempo'),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFFF6B35),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14))),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           SizedBox(
             width: double.infinity,
             height: 52,

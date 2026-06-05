@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
 import '../models/incidente.dart';
+import '../models/linea_tiempo.dart';
 import 'auth_service.dart';
 
 class IncidenteService {
@@ -62,5 +63,23 @@ class IncidenteService {
     );
     if (response.statusCode == 200) return {'ok': true};
     return {'ok': false};
+  }
+
+  Future<LineaTiempoServicio> consultarLineaTiempo(int idIncidente) async {
+    final token = await _auth.getToken();
+    final response = await http.get(
+      Uri.parse('${AppConfig.baseUrl}/incidentes/$idIncidente/linea-tiempo'),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+
+    final data = jsonDecode(utf8.decode(response.bodyBytes));
+    if (response.statusCode == 200) {
+      return LineaTiempoServicio.fromJson(Map<String, dynamic>.from(data));
+    }
+
+    final mensaje = data is Map
+        ? data['detail']?.toString() ?? 'No se pudo cargar la linea de tiempo'
+        : 'No se pudo cargar la linea de tiempo';
+    throw Exception(mensaje);
   }
 }
