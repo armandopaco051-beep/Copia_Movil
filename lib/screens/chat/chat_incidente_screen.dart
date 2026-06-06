@@ -100,6 +100,7 @@ class _ChatIncidenteScreenState extends State<ChatIncidenteScreen> {
         _conectando = false;
         _intentosReconexion = 0;
       });
+      await _sincronizarHistorial();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -143,13 +144,36 @@ class _ChatIncidenteScreenState extends State<ChatIncidenteScreen> {
   void _programarReconexion() {
     _reconnectTimer?.cancel();
     _intentosReconexion++;
-    final segundos = (_intentosReconexion * 2).clamp(2, 15).toInt();
+    final segundos = _intentosReconexion.clamp(1, 5).toInt();
     _reconnectTimer = Timer(
       Duration(seconds: segundos),
       () {
         if (mounted) _conectarWebSocket();
       },
     );
+  }
+
+  Future<void> _sincronizarHistorial() async {
+    try {
+      final chat = await _service.cargarHistorial(widget.idIncidente);
+      if (!mounted) return;
+      setState(() {
+        _chat = chat;
+        for (final mensaje in chat.mensajes) {
+          if (!_yaExiste(mensaje)) {
+            _mensajes.removeWhere(
+              (m) =>
+                  m.id < 0 &&
+                  mensaje.emisorTipo.toLowerCase() == 'cliente' &&
+                  m.mensaje == mensaje.mensaje,
+            );
+            _mensajes.add(mensaje);
+          }
+        }
+        _mensajes.sort((a, b) => a.fechaHora.compareTo(b.fechaHora));
+      });
+      _moverAlFinal();
+    } catch (_) {}
   }
 
   Future<void> _enviarMensaje() async {

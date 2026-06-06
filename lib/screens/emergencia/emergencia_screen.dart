@@ -1,15 +1,18 @@
+import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:tallermovil/services/evidencia_service.dart';
-import 'dart:io';
+import '../../models/linea_tiempo.dart';
 import '../../models/vehiculo.dart';
 import '../../models/usuario.dart';
 import '../../services/vehiculo_service.dart';
 import '../../services/incidente_service.dart';
 import '../../services/auth_service.dart';
 import '../chat/chat_incidente_screen.dart';
+import '../cotizaciones/cotizaciones_express_screen.dart';
 import '../evaluaciones/evaluar_servicio_screen.dart';
 import '../incidentes/linea_tiempo_screen.dart';
 import '../pagos/pago_servicio_screen.dart';
@@ -36,7 +39,12 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
   Usuario? _usuario;
   bool _loadingUbicacion = false;
   bool _enviando = false;
+  bool _cotizacionExpress = false;
+  bool _actualizandoEstado = false;
   int? _incidenteCreado;
+  Timer? _estadoTimer;
+  LineaTiempoServicio? _lineaTiempo;
+  String? _errorEstado;
 
   final _descCtrl = TextEditingController();
   final _picker = ImagePicker();
@@ -83,10 +91,17 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
     _inicializar();
   }
 
+  @override
+  void dispose() {
+    _estadoTimer?.cancel();
+    _descCtrl.dispose();
+    super.dispose();
+  }
+
   Future<void> _inicializar() async {
     _usuario = await AuthService().getUsuarioActual();
     if (_usuario != null) {
-      final lista = await VehiculoService().listarPorUsuario(_usuario!.codigo);
+      final lista = await VehiculoService().listarMisVehiculos();
       setState(() => _vehiculos = lista);
     }
   }
@@ -164,6 +179,7 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
       idVehiculo: _vehiculoSeleccionado!.codigo,
       idCategoria: _categoriaSeleccionada!,
       codigoUsuario: _usuario!.codigo,
+      cotizacionExpress: _cotizacionExpress,
     );
 
     if (!resIncidente['ok']) {
@@ -173,7 +189,41 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
       return;
     }
 
-    final idIncidente = resIncidente['data']['codigo'];
+    final idIncidente = int.tryParse(
+          resIncidente['data']?['codigo']?.toString() ?? '',
+        ) ??
+        0;
+    if (idIncidente <= 0) {
+      setState(() => _enviando = false);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('El backend no devolvio un incidente valido.'),
+        backgroundColor: Colors.red,
+      ));
+      return;
+    }
+    if (_cotizacionExpress) {
+      if (!mounted) return;
+      final fotos = List<File>.from(_fotos);
+      final audio = _audioFile;
+      final descripcion = _descCtrl.text;
+      setState(() => _enviando = false);
+      unawaited(_procesarEvidenciasEnSegundoPlano(
+        idIncidente,
+        fotos: fotos,
+        audio: audio,
+        descripcion: descripcion,
+      ));
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => CotizacionesExpressScreen(
+            idIncidente: idIncidente,
+          ),
+        ),
+      );
+      return;
+    }
+
     final evidenciaSvc = EvidenciaService();
 
     // PASO 2: Subir fotos (CU-11)
@@ -204,6 +254,83 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
       _incidenteCreado = idIncidente;
       _paso = 3;
     });
+    _iniciarSeguimientoEstado(idIncidente);
+  }
+
+  Future<void> _procesarEvidenciasEnSegundoPlano(
+    int idIncidente, {
+    required List<File> fotos,
+    required File? audio,
+    required String descripcion,
+  }) async {
+    final evidenciaSvc = EvidenciaService();
+
+    try {
+      for (final foto in fotos) {
+        await evidenciaSvc.subirImagen(
+          idIncidente: idIncidente,
+          imagen: foto,
+        );
+      }
+
+      if (audio != null) {
+        await evidenciaSvc.subirAudio(
+          idIncidente: idIncidente,
+          audio: audio,
+        );
+      }
+
+      if (descripcion.isNotEmpty) {
+        await evidenciaSvc.subirTexto(
+          idIncidente: idIncidente,
+          descripcion: descripcion,
+        );
+      }
+
+      await evidenciaSvc.procesarConIA(idIncidente);
+    } catch (e) {
+      debugPrint('Error procesando evidencias del incidente: $e');
+    }
+  }
+
+  void _iniciarSeguimientoEstado(int idIncidente) {
+    _estadoTimer?.cancel();
+    _cargarEstadoIncidente(idIncidente);
+    _estadoTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _cargarEstadoIncidente(idIncidente, silencioso: true),
+    );
+  }
+
+  Future<void> _cargarEstadoIncidente(
+    int idIncidente, {
+    bool silencioso = false,
+  }) async {
+    if (_actualizandoEstado) return;
+
+    if (mounted) {
+      setState(() {
+        _actualizandoEstado = true;
+        if (!silencioso) _errorEstado = null;
+      });
+    }
+    try {
+      final linea =
+          await IncidenteService().consultarLineaTiempo(idIncidente);
+      if (!mounted) return;
+      setState(() {
+        _actualizandoEstado = false;
+        _lineaTiempo = linea;
+        _errorEstado = null;
+      });
+      if (_servicioFinalizado) _estadoTimer?.cancel();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _actualizandoEstado = false;
+        _errorEstado = e.toString().replaceFirst('Exception: ', '');
+      });
+    }
   }
 
   @override
@@ -431,6 +558,55 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
             ...(_vehiculos.map((v) => _opcionVehiculo(v))),
             const SizedBox(height: 20),
 
+            Text('Modo de atencion',
+                style: TextStyle(
+                    color: Colors.grey[400],
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment<bool>(
+                  value: false,
+                  icon: Icon(Icons.auto_awesome_outlined),
+                  label: Text('Automatica'),
+                ),
+                ButtonSegment<bool>(
+                  value: true,
+                  icon: Icon(Icons.request_quote_outlined),
+                  label: Text('Cotizaciones'),
+                ),
+              ],
+              selected: {_cotizacionExpress},
+              onSelectionChanged: (seleccion) {
+                setState(() => _cotizacionExpress = seleccion.first);
+              },
+              showSelectedIcon: false,
+              style: ButtonStyle(
+                visualDensity: VisualDensity.compact,
+                backgroundColor: MaterialStateProperty.resolveWith((states) {
+                  if (states.contains(MaterialState.selected)) {
+                    return const Color(0xFFFF6B35).withOpacity(0.18);
+                  }
+                  return const Color(0xFF161B22);
+                }),
+                foregroundColor: MaterialStateProperty.resolveWith((states) {
+                  if (states.contains(MaterialState.selected)) {
+                    return const Color(0xFFFF6B35);
+                  }
+                  return Colors.grey[400];
+                }),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _cotizacionExpress
+                  ? 'Recibiras ofertas de talleres cercanos y elegiras una.'
+                  : 'El sistema asignara automaticamente un taller disponible.',
+              style: TextStyle(color: Colors.grey[500], fontSize: 12),
+            ),
+            const SizedBox(height: 20),
+
             // Descripción
             Text('Descripción (opcional)',
                 style: TextStyle(
@@ -521,7 +697,11 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
         ),
       ),
       _botonSiguiente(
-        _enviando ? 'Enviando...' : '🚨 Enviar Reporte de Emergencia',
+        _enviando
+            ? 'Enviando...'
+            : _cotizacionExpress
+                ? 'Solicitar cotizaciones'
+                : 'Enviar Reporte de Emergencia',
         _enviando ? null : _enviarReporte,
         color: const Color(0xFFDC2626),
       ),
@@ -530,10 +710,20 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
 
   // PASO 3: Confirmado
   Widget _pantallaConfirmado() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+    final idIncidente = _incidenteCreado;
+    final tallerAsignado = _tallerAsignado;
+    final tecnicoEnCamino = _tecnicoEnCamino;
+    final servicioFinalizado = _servicioFinalizado;
+
+    return RefreshIndicator(
+      color: const Color(0xFFFF6B35),
+      onRefresh: idIncidente == null
+          ? () async {}
+          : () => _cargarEstadoIncidente(idIncidente),
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(32, 28, 32, 32),
+        child: Column(children: [
           Container(
             width: 100,
             height: 100,
@@ -552,7 +742,9 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
               style:
                   TextStyle(color: Colors.grey[500], fontSize: 15, height: 1.6),
               textAlign: TextAlign.center),
-          const SizedBox(height: 40),
+          const SizedBox(height: 20),
+          _estadoEnVivoChip(),
+          const SizedBox(height: 24),
           Container(
             padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
@@ -562,13 +754,30 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
             child: Column(children: [
               _estadoItem(
                   Icons.check_circle, '4CAF50', 'Reporte recibido', true),
-              _estadoItem(Icons.access_time, '8B949E',
-                  'Buscando taller cercano', false),
               _estadoItem(
+                tallerAsignado
+                    ? Icons.home_repair_service_outlined
+                    : Icons.access_time,
+                tallerAsignado ? '4CAF50' : '8B949E',
+                tallerAsignado ? 'Taller asignado' : 'Buscando taller cercano',
+                tallerAsignado,
+              ),
+              if (tecnicoEnCamino)
+                _estadoItem(Icons.local_shipping_outlined, '4CAF50',
+                    'Tecnico en camino', true),
+              if (servicioFinalizado)
+                _estadoItem(Icons.check_circle_outline, '4CAF50',
+                    'Servicio finalizado', true),
+              if (!tecnicoEnCamino)
+                _estadoItem(
                   Icons.person_outline, '8B949E', 'Técnico en camino', false),
             ]),
           ),
-          const SizedBox(height: 32),
+          if (_errorEstado != null) ...[
+            const SizedBox(height: 12),
+            _avisoEstado(_errorEstado!),
+          ],
+          const SizedBox(height: 24),
           if (_incidenteCreado != null) ...[
             SizedBox(
               width: double.infinity,
@@ -731,6 +940,87 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
           ),
         ]),
       ),
+    );
+  }
+
+  Widget _estadoEnVivoChip() {
+    final estado = _lineaTiempo?.estadoActual ?? 'Actualizando estado';
+    return Container(
+      constraints: const BoxConstraints(maxWidth: double.infinity),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF161B22),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withOpacity(0.07)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        if (_actualizandoEstado)
+          const SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(
+              color: Color(0xFFFF6B35),
+              strokeWidth: 2,
+            ),
+          )
+        else
+          const Icon(Icons.sync, size: 15, color: Color(0xFF1D9E75)),
+        const SizedBox(width: 8),
+        Flexible(
+          child: Text(
+            estado,
+            style: const TextStyle(color: Colors.white, fontSize: 12),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _avisoEstado(String mensaje) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.orange.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.orange.withOpacity(0.25)),
+      ),
+      child: Text(
+        mensaje,
+        style: const TextStyle(color: Colors.orange, fontSize: 12),
+        textAlign: TextAlign.center,
+      ),
+    );
+  }
+
+  bool get _tallerAsignado {
+    return _contieneEstado(['taller', 'asign']);
+  }
+
+  bool get _tecnicoEnCamino {
+    return _contieneEstado(['tecnico', 'camino']) ||
+        _contieneEstado(['desplaz', 'ruta']);
+  }
+
+  bool get _servicioFinalizado {
+    return _contieneEstado(['final', 'cerr', 'complet']);
+  }
+
+  bool _contieneEstado(List<String> palabras) {
+    final linea = _lineaTiempo;
+    if (linea == null) return false;
+
+    final textos = <String>[linea.estadoActual.toLowerCase()];
+    for (final evento in linea.eventos) {
+      textos.add(evento.codigo.toLowerCase());
+      textos.add(evento.titulo.toLowerCase());
+      textos.add(evento.descripcion.toLowerCase());
+      textos.add(evento.estado.toLowerCase());
+    }
+
+    return textos.any(
+      (texto) => palabras.any((palabra) => texto.contains(palabra)),
     );
   }
 

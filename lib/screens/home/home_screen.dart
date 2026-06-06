@@ -1,12 +1,15 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../models/usuario.dart';
 import '../../services/auth_service.dart';
+import '../../services/notificacion_service.dart';
 import '../perfil/perfil_screen.dart';
 import '../vehiculos/vehiculos_screen.dart';
 import '../emergencia/emergencia_screen.dart';
 import '../evaluaciones/evaluar_servicio_screen.dart';
 import '../incidentes/linea_tiempo_screen.dart';
+import '../notificaciones/notificaciones_screen.dart';
 import '../pagos/pago_servicio_screen.dart';
 import '../tracking/tracking_en_vivo_screen.dart';
 import '../validacion/codigo_arribo_screen.dart';
@@ -20,16 +23,47 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _tabActual = 0;
   Usuario? _usuario;
+  int _notificacionesNoLeidas = 0;
+  Timer? _notificacionesTimer;
 
   @override
   void initState() {
     super.initState();
     _cargarUsuario();
+    _cargarContadorNotificaciones();
+    _notificacionesTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _cargarContadorNotificaciones(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _notificacionesTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _cargarUsuario() async {
     final u = await AuthService().getUsuarioActual();
+    if (!mounted) return;
     setState(() => _usuario = u);
+  }
+
+  Future<void> _cargarContadorNotificaciones() async {
+    try {
+      final total = await NotificacionService().contarNoLeidas();
+      if (!mounted) return;
+      setState(() => _notificacionesNoLeidas = total);
+    } catch (_) {}
+  }
+
+  Future<void> _abrirNotificaciones() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const NotificacionesScreen()),
+    );
+    if (!mounted) return;
+    _cargarContadorNotificaciones();
   }
 
   @override
@@ -37,6 +71,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final tabs = [
       _HomeTab(
           usuario: _usuario,
+          notificacionesNoLeidas: _notificacionesNoLeidas,
+          onNotificaciones: _abrirNotificaciones,
           onEmergencia: () {
             Navigator.push(context,
                 MaterialPageRoute(builder: (_) => const EmergenciaScreen()));
@@ -74,8 +110,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
 class _HomeTab extends StatelessWidget {
   final Usuario? usuario;
+  final int notificacionesNoLeidas;
+  final VoidCallback onNotificaciones;
   final VoidCallback onEmergencia;
-  const _HomeTab({this.usuario, required this.onEmergencia});
+  const _HomeTab({
+    this.usuario,
+    required this.notificacionesNoLeidas,
+    required this.onNotificaciones,
+    required this.onEmergencia,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -91,13 +134,18 @@ class _HomeTab extends StatelessWidget {
               Text('¿Necesitas asistencia?',
                   style: TextStyle(color: Colors.grey[500], fontSize: 14)),
             ]),
-            CircleAvatar(
-              radius: 22,
-              backgroundColor: const Color(0xFFFF6B35),
-              child: Text(usuario?.nombre.substring(0, 1).toUpperCase() ?? 'U',
-                  style: const TextStyle(
-                      color: Colors.white, fontWeight: FontWeight.bold)),
-            ),
+            Row(children: [
+              _campanaNotificaciones(),
+              const SizedBox(width: 10),
+              CircleAvatar(
+                radius: 22,
+                backgroundColor: const Color(0xFFFF6B35),
+                child: Text(
+                    _inicialUsuario(),
+                    style: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold)),
+              ),
+            ]),
           ]),
           const SizedBox(height: 32),
 
@@ -387,6 +435,50 @@ class _HomeTab extends StatelessWidget {
         Text(label,
             style: const TextStyle(fontSize: 12, color: Colors.white70)),
       ]),
+    );
+  }
+
+  String _inicialUsuario() {
+    final nombre = usuario?.nombre.trim();
+    if (nombre == null || nombre.isEmpty) return 'U';
+    return nombre.substring(0, 1).toUpperCase();
+  }
+
+  Widget _campanaNotificaciones() {
+    return IconButton(
+      tooltip: 'Notificaciones',
+      onPressed: onNotificaciones,
+      icon: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          const Icon(Icons.notifications_outlined),
+          if (notificacionesNoLeidas > 0)
+            Positioned(
+              right: -7,
+              top: -7,
+              child: Container(
+                constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+                padding: const EdgeInsets.symmetric(horizontal: 5),
+                decoration: BoxDecoration(
+                  color: Color(0xFFDC2626),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Center(
+                  child: Text(
+                    notificacionesNoLeidas > 99
+                        ? '99+'
+                        : notificacionesNoLeidas.toString(),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 

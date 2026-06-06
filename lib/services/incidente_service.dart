@@ -16,8 +16,16 @@ class IncidenteService {
     required int idCategoria,
     // ✅ CAMBIO: codigoUsuario de int a String
     required String codigoUsuario,
+    bool cotizacionExpress = false,
   }) async {
     final token = await _auth.getToken();
+    if (token == null || token.isEmpty) {
+      return {
+        'ok': false,
+        'statusCode': 401,
+        'error': 'Error 401: Sesion vencida. Inicia sesion nuevamente.',
+      };
+    }
     final response = await http.post(
       Uri.parse('${AppConfig.baseUrl}/incidentes/'),
       headers: {
@@ -34,11 +42,29 @@ class IncidenteService {
         'id_estado_incidente': 1,
         'id_vehiculo': idVehiculo,
         'codigo_usuario': codigoUsuario,
+        'cotizacion_express': cotizacionExpress,
       }),
     );
-    final data = jsonDecode(utf8.decode(response.bodyBytes));
-    if (response.statusCode == 201) return {'ok': true, 'data': data};
-    return {'ok': false, 'error': data['detail'] ?? 'Error al reportar'};
+    final body = utf8.decode(response.bodyBytes);
+    dynamic data;
+    try {
+      data = body.trim().isEmpty ? null : jsonDecode(body);
+    } catch (_) {
+      data = {'detail': body};
+    }
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return {'ok': true, 'data': data};
+    }
+
+    final detail = data is Map && data['detail'] != null
+        ? data['detail'].toString()
+        : 'Error al reportar';
+    return {
+      'ok': false,
+      'statusCode': response.statusCode,
+      'error': 'Error ${response.statusCode}: $detail',
+    };
   }
 
   // ✅ CAMBIO: codigoUsuario de int a String

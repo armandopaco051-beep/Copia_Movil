@@ -7,12 +7,23 @@ import 'auth_service.dart';
 class VehiculoService {
   final _auth = AuthService();
 
-  // ✅ CAMBIO: idUsuario de int a String
-  Future<List<Vehiculo>> listarPorUsuario(String idUsuario) async {
+  Future<Map<String, String>> _headers({bool json = false}) async {
     final token = await _auth.getToken();
+    if (token == null || token.isEmpty) {
+      throw Exception('No hay token. Inicia sesion nuevamente.');
+    }
+
+    return {
+      if (json) 'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'Authorization': 'Bearer $token',
+    };
+  }
+
+  Future<List<Vehiculo>> listarMisVehiculos() async {
     final response = await http.get(
-      Uri.parse('${AppConfig.baseUrl}/vehiculos/usuario/$idUsuario'),
-      headers: {'Authorization': 'Bearer $token'},
+      Uri.parse('${AppConfig.baseUrl}/vehiculos/mis-vehiculos'),
+      headers: await _headers(),
     );
     if (response.statusCode == 200) {
       final List data = jsonDecode(utf8.decode(response.bodyBytes));
@@ -26,26 +37,21 @@ class VehiculoService {
     required String modelo,
     required String placa,
     required String anio,
-    // ✅ CAMBIO: idUsuario de int a String
-    required String idUsuario,
   }) async {
-    final token = await _auth.getToken();
     final response = await http.post(
       Uri.parse('${AppConfig.baseUrl}/vehiculos/'),
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $token',
-      },
+      headers: await _headers(json: true),
       body: jsonEncode({
         'marca': marca,
         'modelo': modelo,
         'placa': placa,
-        'año': anio,
-        'id_usuario': idUsuario,
+        'anio': anio,
       }),
     );
     final data = jsonDecode(utf8.decode(response.bodyBytes));
-    if (response.statusCode == 201) return {'ok': true, 'data': data};
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return {'ok': true, 'data': data};
+    }
     return {'ok': false, 'error': data['detail'] ?? 'Error al crear vehículo'};
   }
 
@@ -53,13 +59,9 @@ class VehiculoService {
     required int codigo,
     required Map<String, dynamic> datos,
   }) async {
-    final token = await _auth.getToken();
     final response = await http.put(
       Uri.parse('${AppConfig.baseUrl}/vehiculos/$codigo'),
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $token',
-      },
+      headers: await _headers(json: true),
       body: jsonEncode(datos),
     );
     final data = jsonDecode(utf8.decode(response.bodyBytes));
@@ -68,10 +70,9 @@ class VehiculoService {
   }
 
   Future<Map<String, dynamic>> eliminar(int codigo) async {
-    final token = await _auth.getToken();
     final response = await http.delete(
       Uri.parse('${AppConfig.baseUrl}/vehiculos/$codigo'),
-      headers: {'Authorization': 'Bearer $token'},
+      headers: await _headers(),
     );
     if (response.statusCode == 200) return {'ok': true};
     return {'ok': false, 'error': 'Error al eliminar'};

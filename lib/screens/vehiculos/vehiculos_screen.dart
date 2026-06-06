@@ -50,7 +50,7 @@ class _VehiculosScreenState extends State<VehiculosScreen> {
         return;
       }
 
-      final lista = await _svc.listarPorUsuario(usuario.codigo);
+      final lista = await _svc.listarMisVehiculos();
 
       if (!mounted) return;
 
@@ -126,14 +126,13 @@ class _VehiculosScreenState extends State<VehiculosScreen> {
                         marca: _marca.text,
                         modelo: _modelo.text,
                         placa: _placa.text,
-                        anio: _anio.text,
-                        idUsuario: _usuario!.codigo);
+                        anio: _anio.text);
                   } else {
                     await _svc.actualizar(codigo: v.codigo, datos: {
                       'marca': _marca.text,
                       'modelo': _modelo.text,
                       'placa': _placa.text,
-                      'año': _anio.text,
+                      'anio': _anio.text,
                     });
                   }
                   _cargar();

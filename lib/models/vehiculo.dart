@@ -34,7 +34,6 @@ class Vehiculo {
         'modelo': modelo,
         'placa': placa,
         'marca': marca,
-        'año': anio,
-        'id_usuario': idUsuario,
+        'anio': anio,
       };
 }
