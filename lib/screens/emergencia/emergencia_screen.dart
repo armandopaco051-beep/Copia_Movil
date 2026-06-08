@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
@@ -11,6 +12,7 @@ import '../../models/usuario.dart';
 import '../../services/vehiculo_service.dart';
 import '../../services/incidente_service.dart';
 import '../../services/auth_service.dart';
+import '../../services/offline_sync_service.dart';
 import '../chat/chat_incidente_screen.dart';
 import '../cotizaciones/cotizaciones_express_screen.dart';
 import '../evaluaciones/evaluar_servicio_screen.dart';
@@ -29,11 +31,10 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
   int _paso = 0; // 0=tipo, 1=ubicacion, 2=detalles, 3=confirmado
 
   int? _categoriaSeleccionada;
-  String _descripcion = '';
   Position? _posicion;
   List<File> _fotos = [];
-  File? _audioFile;
-  String _transcripcionAudio = '';
+  List<File> _audios = [];
+  List<String> _transcripcionesAudio = [];
   Vehiculo? _vehiculoSeleccionado;
   List<Vehiculo> _vehiculos = [];
   Usuario? _usuario;
@@ -41,13 +42,17 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
   bool _enviando = false;
   bool _cotizacionExpress = false;
   bool _actualizandoEstado = false;
+  bool _reporteOffline = false;
   int? _incidenteCreado;
+  String? _incidenteOfflineCreado;
   Timer? _estadoTimer;
   LineaTiempoServicio? _lineaTiempo;
   String? _errorEstado;
 
   final _descCtrl = TextEditingController();
   final _picker = ImagePicker();
+  static const MethodChannel _audioPickerChannel =
+      MethodChannel('tallermovil/audio_picker');
 
   final List<Map<String, dynamic>> _categorias = [
     {
@@ -158,6 +163,65 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
     if (img != null) setState(() => _fotos.add(File(img.path)));
   }
 
+  // CU-14: Adjuntar audio como evidencia para que el backend lo transcriba.
+  Future<void> _agregarAudio() async {
+    try {
+      final result =
+          await _audioPickerChannel.invokeMethod<Map<dynamic, dynamic>>(
+        'pickAudio',
+      );
+      if (result == null) return;
+
+      final path = result['path']?.toString();
+      if (path == null || path.isEmpty) return;
+
+      setState(() => _audios.add(File(path)));
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(e.message ?? 'No se pudo seleccionar el audio'),
+        backgroundColor: Colors.red,
+      ));
+    }
+  }
+
+  String _nombreArchivo(File archivo) {
+    return archivo.path.split(Platform.pathSeparator).last;
+  }
+
+  String _descripcionReporte() {
+    return _descCtrl.text.trim().isEmpty
+        ? _categorias
+            .firstWhere((c) => c['id'] == _categoriaSeleccionada)['nombre']
+            .toString()
+        : _descCtrl.text.trim();
+  }
+
+  Future<void> _guardarReporteOffline(String descripcion) async {
+    // CU-OFF-01: Registrar incidente en modo offline local cuando no hay red.
+    // CU-OFF-02: Guardar fotos, audios y texto para sincronizarlos despues.
+    final idLocal = await OfflineSyncService().guardarIncidenteLocal(
+      descripcion: descripcion,
+      latitud: _posicion?.latitude ?? -17.7833,
+      longitud: _posicion?.longitude ?? -63.1821,
+      idVehiculo: _vehiculoSeleccionado!.codigo,
+      idCategoria: _categoriaSeleccionada!,
+      codigoUsuario: _usuario!.codigo,
+      cotizacionExpress: _cotizacionExpress,
+      imagenes: _fotos,
+      audios: _audios,
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _enviando = false;
+      _reporteOffline = true;
+      _incidenteCreado = null;
+      _incidenteOfflineCreado = idLocal;
+      _paso = 3;
+    });
+  }
+
   Future<void> _enviarReporte() async {
     if (_vehiculoSeleccionado == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -167,20 +231,41 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
     }
 
     setState(() => _enviando = true);
+    final descripcion = _descripcionReporte();
+
+    // CU-OFF-03: Si no hay internet, no se pierde el reporte: queda pendiente.
+    if (!await OfflineSyncService().hayConexion()) {
+      await _guardarReporteOffline(descripcion);
+      return;
+    }
 
     // PASO 1: Crear el incidente
-    final resIncidente = await IncidenteService().crear(
-      descripcion: _descCtrl.text.isEmpty
-          ? _categorias
-              .firstWhere((c) => c['id'] == _categoriaSeleccionada)['nombre']
-          : _descCtrl.text,
-      latitud: _posicion?.latitude ?? -17.7833,
-      longitud: _posicion?.longitude ?? -63.1821,
-      idVehiculo: _vehiculoSeleccionado!.codigo,
-      idCategoria: _categoriaSeleccionada!,
-      codigoUsuario: _usuario!.codigo,
-      cotizacionExpress: _cotizacionExpress,
-    );
+    late final Map<String, dynamic> resIncidente;
+    try {
+      resIncidente = await IncidenteService().crear(
+        descripcion: descripcion,
+        latitud: _posicion?.latitude ?? -17.7833,
+        longitud: _posicion?.longitude ?? -63.1821,
+        idVehiculo: _vehiculoSeleccionado!.codigo,
+        idCategoria: _categoriaSeleccionada!,
+        codigoUsuario: _usuario!.codigo,
+        cotizacionExpress: _cotizacionExpress,
+      );
+    } on SocketException {
+      await _guardarReporteOffline(descripcion);
+      return;
+    } catch (e) {
+      if (!await OfflineSyncService().hayConexion()) {
+        await _guardarReporteOffline(descripcion);
+        return;
+      }
+      setState(() => _enviando = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Error al reportar: $e'),
+        backgroundColor: Colors.red,
+      ));
+      return;
+    }
 
     if (!resIncidente['ok']) {
       setState(() => _enviando = false);
@@ -204,13 +289,12 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
     if (_cotizacionExpress) {
       if (!mounted) return;
       final fotos = List<File>.from(_fotos);
-      final audio = _audioFile;
-      final descripcion = _descCtrl.text;
+      final audios = List<File>.from(_audios);
       setState(() => _enviando = false);
       unawaited(_procesarEvidenciasEnSegundoPlano(
         idIncidente,
         fotos: fotos,
-        audio: audio,
+        audios: audios,
         descripcion: descripcion,
       ));
       Navigator.pushReplacement(
@@ -226,25 +310,23 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
 
     final evidenciaSvc = EvidenciaService();
 
-    // PASO 2: Subir fotos (CU-11)
-    for (final foto in _fotos) {
-      await evidenciaSvc.subirImagen(idIncidente: idIncidente, imagen: foto);
-    }
-
-    // PASO 3: Subir audio si existe (CU-11 + CU-14)
-    if (_audioFile != null) {
-      final resAudio = await evidenciaSvc.subirAudio(
-          idIncidente: idIncidente, audio: _audioFile!);
-      if (resAudio['ok'] && resAudio['transcripcion']?.isNotEmpty == true) {
-        setState(() => _transcripcionAudio = resAudio['transcripcion']);
+    // PASO 2: Subir evidencias juntas: imagenes, audios y texto.
+    if (_fotos.isNotEmpty || _audios.isNotEmpty || descripcion.isNotEmpty) {
+      final resMultimedia = await evidenciaSvc.subirMultimedia(
+        idIncidente: idIncidente,
+        imagenes: _fotos,
+        audios: _audios,
+        texto: descripcion,
+      );
+      if (resMultimedia['ok'] == true) {
+        setState(() {
+          _transcripcionesAudio =
+              List<String>.from(resMultimedia['transcripciones_audio'] ?? []);
+        });
       }
     }
 
     // PASO 4: Subir descripción de texto si hay (CU-11)
-    if (_descCtrl.text.isNotEmpty) {
-      await evidenciaSvc.subirTexto(
-          idIncidente: idIncidente, descripcion: _descCtrl.text);
-    }
 
     // PASO 5: Procesar con IA automáticamente (CU-12 + CU-13)
     await evidenciaSvc.procesarConIA(idIncidente);
@@ -260,30 +342,18 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
   Future<void> _procesarEvidenciasEnSegundoPlano(
     int idIncidente, {
     required List<File> fotos,
-    required File? audio,
+    required List<File> audios,
     required String descripcion,
   }) async {
     final evidenciaSvc = EvidenciaService();
 
     try {
-      for (final foto in fotos) {
-        await evidenciaSvc.subirImagen(
+      if (fotos.isNotEmpty || audios.isNotEmpty || descripcion.isNotEmpty) {
+        await evidenciaSvc.subirMultimedia(
           idIncidente: idIncidente,
-          imagen: foto,
-        );
-      }
-
-      if (audio != null) {
-        await evidenciaSvc.subirAudio(
-          idIncidente: idIncidente,
-          audio: audio,
-        );
-      }
-
-      if (descripcion.isNotEmpty) {
-        await evidenciaSvc.subirTexto(
-          idIncidente: idIncidente,
-          descripcion: descripcion,
+          imagenes: fotos,
+          audios: audios,
+          texto: descripcion,
         );
       }
 
@@ -315,8 +385,7 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
       });
     }
     try {
-      final linea =
-          await IncidenteService().consultarLineaTiempo(idIncidente);
+      final linea = await IncidenteService().consultarLineaTiempo(idIncidente);
       if (!mounted) return;
       setState(() {
         _actualizandoEstado = false;
@@ -693,6 +762,76 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
                               TextStyle(color: Colors.grey[600], fontSize: 12)),
                     ])),
               ),
+            const SizedBox(height: 20),
+
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              Text('Audio para transcribir',
+                  style: TextStyle(
+                      color: Colors.grey[400],
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold)),
+              TextButton.icon(
+                onPressed: _agregarAudio,
+                icon: const Icon(Icons.mic, size: 18, color: Color(0xFFFF6B35)),
+                label: const Text('Adjuntar',
+                    style: TextStyle(color: Color(0xFFFF6B35))),
+              ),
+            ]),
+            if (_audios.isEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                    color: const Color(0xFF161B22),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white.withOpacity(0.07))),
+                child: Row(children: [
+                  Icon(Icons.graphic_eq, color: Colors.grey[600], size: 26),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Adjunta un audio y se transcribira al enviar el reporte',
+                      style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                    ),
+                  ),
+                ]),
+              ),
+            if (_audios.isNotEmpty)
+              Column(
+                children: _audios.asMap().entries.map((entry) {
+                  final index = entry.key;
+                  final audio = entry.value;
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                        color: const Color(0xFF161B22),
+                        borderRadius: BorderRadius.circular(12),
+                        border:
+                            Border.all(color: Colors.white.withOpacity(0.07))),
+                    child: Row(children: [
+                      const Icon(Icons.audio_file,
+                          color: Color(0xFFFF6B35), size: 24),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          _nombreArchivo(audio),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 13),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () =>
+                            setState(() => _audios.removeAt(index)),
+                        icon: const Icon(Icons.close,
+                            color: Colors.redAccent, size: 20),
+                      ),
+                    ]),
+                  );
+                }).toList(),
+              ),
           ]),
         ),
       ),
@@ -728,51 +867,92 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
             width: 100,
             height: 100,
             decoration: BoxDecoration(
-                color: Colors.green.withOpacity(0.12), shape: BoxShape.circle),
-            child: const Icon(Icons.check_circle,
-                size: 60, color: Color(0xFF4CAF50)),
+                color: (_reporteOffline ? Colors.orange : Colors.green)
+                    .withOpacity(0.12),
+                shape: BoxShape.circle),
+            child: Icon(
+              _reporteOffline ? Icons.cloud_off_outlined : Icons.check_circle,
+              size: 60,
+              color: _reporteOffline ? Colors.orange : const Color(0xFF4CAF50),
+            ),
           ),
           const SizedBox(height: 24),
-          Text('¡Reporte Enviado!',
+          Text(_reporteOffline ? 'Reporte guardado offline' : 'Reporte enviado',
               style: GoogleFonts.outfit(
                   fontSize: 26, fontWeight: FontWeight.bold)),
           const SizedBox(height: 12),
           Text(
-              'Tu reporte #$_incidenteCreado fue recibido.\nUn técnico será asignado pronto.',
+              _reporteOffline
+                  ? 'Tu reporte $_incidenteOfflineCreado quedo pendiente de sincronizacion.\nCuando vuelva internet podras enviarlo al backend.'
+                  : 'Tu reporte #$_incidenteCreado fue recibido.\nUn tecnico sera asignado pronto.',
               style:
                   TextStyle(color: Colors.grey[500], fontSize: 15, height: 1.6),
               textAlign: TextAlign.center),
           const SizedBox(height: 20),
-          _estadoEnVivoChip(),
+          _reporteOffline ? _offlinePendienteChip() : _estadoEnVivoChip(),
+          if (_transcripcionesAudio.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                  color: const Color(0xFF161B22),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white.withOpacity(0.07))),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(children: [
+                      Icon(Icons.text_snippet_outlined,
+                          color: Color(0xFFFF6B35), size: 18),
+                      SizedBox(width: 8),
+                      Text('Transcripcion del audio',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13)),
+                    ]),
+                    const SizedBox(height: 8),
+                    Text(
+                      _transcripcionesAudio.join('\n\n'),
+                      style: TextStyle(
+                          color: Colors.grey[400], fontSize: 13, height: 1.4),
+                    ),
+                  ]),
+            ),
+          ],
           const SizedBox(height: 24),
-          Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-                color: const Color(0xFF161B22),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white.withOpacity(0.07))),
-            child: Column(children: [
-              _estadoItem(
-                  Icons.check_circle, '4CAF50', 'Reporte recibido', true),
-              _estadoItem(
-                tallerAsignado
-                    ? Icons.home_repair_service_outlined
-                    : Icons.access_time,
-                tallerAsignado ? '4CAF50' : '8B949E',
-                tallerAsignado ? 'Taller asignado' : 'Buscando taller cercano',
-                tallerAsignado,
-              ),
-              if (tecnicoEnCamino)
-                _estadoItem(Icons.local_shipping_outlined, '4CAF50',
-                    'Tecnico en camino', true),
-              if (servicioFinalizado)
-                _estadoItem(Icons.check_circle_outline, '4CAF50',
-                    'Servicio finalizado', true),
-              if (!tecnicoEnCamino)
+          if (!_reporteOffline)
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                  color: const Color(0xFF161B22),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.white.withOpacity(0.07))),
+              child: Column(children: [
                 _estadoItem(
-                  Icons.person_outline, '8B949E', 'Técnico en camino', false),
-            ]),
-          ),
+                    Icons.check_circle, '4CAF50', 'Reporte recibido', true),
+                _estadoItem(
+                  tallerAsignado
+                      ? Icons.home_repair_service_outlined
+                      : Icons.access_time,
+                  tallerAsignado ? '4CAF50' : '8B949E',
+                  tallerAsignado
+                      ? 'Taller asignado'
+                      : 'Buscando taller cercano',
+                  tallerAsignado,
+                ),
+                if (tecnicoEnCamino)
+                  _estadoItem(Icons.local_shipping_outlined, '4CAF50',
+                      'Tecnico en camino', true),
+                if (servicioFinalizado)
+                  _estadoItem(Icons.check_circle_outline, '4CAF50',
+                      'Servicio finalizado', true),
+                if (!tecnicoEnCamino)
+                  _estadoItem(Icons.person_outline, '8B949E',
+                      'Técnico en camino', false),
+              ]),
+            ),
           if (_errorEstado != null) ...[
             const SizedBox(height: 12),
             _avisoEstado(_errorEstado!),
@@ -970,6 +1150,29 @@ class _EmergenciaScreenState extends State<EmergenciaScreen> {
           child: Text(
             estado,
             style: const TextStyle(color: Colors.white, fontSize: 12),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _offlinePendienteChip() {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: double.infinity),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.orange.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.orange.withOpacity(0.28)),
+      ),
+      child: const Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.cloud_upload_outlined, size: 15, color: Colors.orange),
+        SizedBox(width: 8),
+        Flexible(
+          child: Text(
+            'Pendiente de sincronizacion',
+            style: TextStyle(color: Colors.orange, fontSize: 12),
             overflow: TextOverflow.ellipsis,
           ),
         ),

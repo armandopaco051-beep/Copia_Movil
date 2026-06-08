@@ -1,15 +1,18 @@
 import 'dart:async';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../models/usuario.dart';
 import '../../services/auth_service.dart';
 import '../../services/notificacion_service.dart';
+import '../../services/offline_sync_service.dart';
 import '../perfil/perfil_screen.dart';
 import '../vehiculos/vehiculos_screen.dart';
 import '../emergencia/emergencia_screen.dart';
 import '../evaluaciones/evaluar_servicio_screen.dart';
 import '../incidentes/linea_tiempo_screen.dart';
 import '../notificaciones/notificaciones_screen.dart';
+import '../offline/offline_pendientes_screen.dart';
 import '../pagos/pago_servicio_screen.dart';
 import '../tracking/tracking_en_vivo_screen.dart';
 import '../validacion/codigo_arribo_screen.dart';
@@ -24,22 +27,33 @@ class _HomeScreenState extends State<HomeScreen> {
   int _tabActual = 0;
   Usuario? _usuario;
   int _notificacionesNoLeidas = 0;
+  int _offlinePendientes = 0;
+  bool _sincronizandoOffline = false;
   Timer? _notificacionesTimer;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
 
   @override
   void initState() {
     super.initState();
     _cargarUsuario();
     _cargarContadorNotificaciones();
+    _cargarPendientesOffline();
     _notificacionesTimer = Timer.periodic(
       const Duration(seconds: 30),
       (_) => _cargarContadorNotificaciones(),
     );
+    // CU-OFF-11: Detectar regreso de conexion y sincronizar pendientes.
+    _connectivitySub = Connectivity().onConnectivityChanged.listen((estados) {
+      if (estados.any((estado) => estado != ConnectivityResult.none)) {
+        _sincronizarPendientes(silencioso: true);
+      }
+    });
   }
 
   @override
   void dispose() {
     _notificacionesTimer?.cancel();
+    _connectivitySub?.cancel();
     super.dispose();
   }
 
@@ -57,6 +71,41 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (_) {}
   }
 
+  Future<void> _cargarPendientesOffline() async {
+    final total = await OfflineSyncService().contarPendientes();
+    if (!mounted) return;
+    setState(() => _offlinePendientes = total);
+  }
+
+  Future<void> _abrirPendientesOffline() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const OfflinePendientesScreen()),
+    );
+    if (!mounted) return;
+    _cargarPendientesOffline();
+  }
+
+  Future<void> _sincronizarPendientes({bool silencioso = false}) async {
+    if (_sincronizandoOffline || _offlinePendientes == 0) return;
+    setState(() => _sincronizandoOffline = true);
+    final resultado = await OfflineSyncService().sincronizarPendientes();
+    await _cargarPendientesOffline();
+    if (!mounted) return;
+    setState(() => _sincronizandoOffline = false);
+
+    if (!silencioso) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+          'Sincronizados: ${resultado.sincronizados}. Parciales: ${resultado.parciales}. Conflictos: ${resultado.conflictos}. Errores: ${resultado.conError}.',
+        ),
+        backgroundColor: resultado.conError == 0 && resultado.conflictos == 0
+            ? const Color(0xFF1D9E75)
+            : Colors.orange,
+      ));
+    }
+  }
+
   Future<void> _abrirNotificaciones() async {
     await Navigator.push(
       context,
@@ -72,7 +121,11 @@ class _HomeScreenState extends State<HomeScreen> {
       _HomeTab(
           usuario: _usuario,
           notificacionesNoLeidas: _notificacionesNoLeidas,
+          offlinePendientes: _offlinePendientes,
+          sincronizandoOffline: _sincronizandoOffline,
           onNotificaciones: _abrirNotificaciones,
+          onPendientesOffline: _abrirPendientesOffline,
+          onSincronizarPendientes: () => _sincronizarPendientes(),
           onEmergencia: () {
             Navigator.push(context,
                 MaterialPageRoute(builder: (_) => const EmergenciaScreen()));
@@ -111,12 +164,20 @@ class _HomeScreenState extends State<HomeScreen> {
 class _HomeTab extends StatelessWidget {
   final Usuario? usuario;
   final int notificacionesNoLeidas;
+  final int offlinePendientes;
+  final bool sincronizandoOffline;
   final VoidCallback onNotificaciones;
+  final VoidCallback onPendientesOffline;
+  final VoidCallback onSincronizarPendientes;
   final VoidCallback onEmergencia;
   const _HomeTab({
     this.usuario,
     required this.notificacionesNoLeidas,
+    required this.offlinePendientes,
+    required this.sincronizandoOffline,
     required this.onNotificaciones,
+    required this.onPendientesOffline,
+    required this.onSincronizarPendientes,
     required this.onEmergencia,
   });
 
@@ -140,8 +201,7 @@ class _HomeTab extends StatelessWidget {
               CircleAvatar(
                 radius: 22,
                 backgroundColor: const Color(0xFFFF6B35),
-                child: Text(
-                    _inicialUsuario(),
+                child: Text(_inicialUsuario(),
                     style: const TextStyle(
                         color: Colors.white, fontWeight: FontWeight.bold)),
               ),
@@ -177,6 +237,56 @@ class _HomeTab extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 24),
+
+          if (offlinePendientes > 0) ...[
+            // CU-OFF-12: Mostrar etiqueta Offline/Pendiente y boton sincronizar.
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.orange.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.orange.withOpacity(0.25)),
+              ),
+              child: Row(children: [
+                const Icon(Icons.cloud_upload_outlined,
+                    color: Colors.orange, size: 28),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: onPendientesOffline,
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('$offlinePendientes reporte(s) offline',
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 3),
+                          Text('Pendientes de sincronizacion',
+                              style: TextStyle(
+                                  color: Colors.grey[400], fontSize: 12)),
+                        ]),
+                  ),
+                ),
+                IconButton(
+                  onPressed:
+                      sincronizandoOffline ? null : onSincronizarPendientes,
+                  icon: sincronizandoOffline
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.orange,
+                          ),
+                        )
+                      : const Icon(Icons.sync, color: Colors.orange),
+                ),
+              ]),
+            ),
+            const SizedBox(height: 24),
+          ],
 
           GestureDetector(
             onTap: () => _abrirConsultaLineaTiempo(context),

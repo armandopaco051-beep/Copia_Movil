@@ -9,6 +9,37 @@ import 'auth_service.dart';
 class EvidenciaService {
   final AuthService _auth = AuthService();
 
+  List<String> _extraerTranscripciones(dynamic data) {
+    final transcripciones = <String>[];
+
+    void agregar(dynamic valor) {
+      final texto = valor?.toString().trim();
+      if (texto != null && texto.isNotEmpty) {
+        transcripciones.add(texto);
+      }
+    }
+
+    if (data is Map<String, dynamic>) {
+      agregar(data['transcripcion']);
+
+      final resultadosAudio = data['resultados_audio'];
+      if (resultadosAudio is List) {
+        for (final item in resultadosAudio) {
+          if (item is Map) agregar(item['transcripcion']);
+        }
+      }
+
+      final evidencias = data['evidencias'];
+      if (evidencias is List) {
+        for (final item in evidencias) {
+          if (item is Map) agregar(item['transcripcion']);
+        }
+      }
+    }
+
+    return transcripciones.toSet().toList();
+  }
+
   Map<String, dynamic> _procesarRespuesta({
     required int statusCode,
     required String body,
@@ -18,9 +49,13 @@ class EvidenciaService {
       final data = body.isNotEmpty ? jsonDecode(body) : {};
 
       if (statusCode == 200 || statusCode == 201) {
+        final transcripciones = _extraerTranscripciones(data);
         return {
           'ok': true,
           'data': data,
+          'transcripcion':
+              transcripciones.isNotEmpty ? transcripciones.first : '',
+          'transcripciones_audio': transcripciones,
         };
       }
 
